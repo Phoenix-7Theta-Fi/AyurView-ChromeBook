@@ -1,34 +1,67 @@
-import { GoogleGenAI, FunctionCallingConfigMode, FunctionCall } from '@google/genai';
+import { GoogleGenAI, FunctionCallingConfigMode, FunctionCall, type Chat } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
 import { getProductsForPurchaseDeclaration, handleProductRecommendations } from './functions/products';
 import { getPractitionersForBookingDeclaration, handlePractitionerRecommendations } from './functions/practitioners';
 import { getScheduleActivitiesDeclaration, handleScheduleActivities } from './functions/schedule';
 import { getAnalyticsDataDeclaration, handleAnalyticsData } from './functions/analytics';
 import type { Product, Practitioner, TreatmentPlanActivity } from '@/lib/types';
+import { verifyJwtToken } from '@/lib/utils';
 
-// Initialize the Google GenAI client
+// Initialize Google GenAI
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? '';
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-
-// Default response text for when no other text is available
 const DEFAULT_RESPONSE = "I understand your query. Let me help you with that.";
 
-export async function POST(request: NextRequest) {
-  try {
-    const { question } = await request.json();
+// Session storage
+const chatSessions = new Map<string, ChatSessionManager>();
 
-    if (!question || typeof question !== 'string') {
-      return NextResponse.json(
-        { error: 'Question is required and must be a string' },
-        { status: 400 }
-      );
-    }
+// Session cleanup (30 minutes timeout)
+const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes in milliseconds
 
-    // Create the prompt with Ayurvedic context and data analysis capabilities
-    const prompt = `You are AyurAid, an expert Ayurvedic health analyst and advisor with deep knowledge of holistic wellness.
+interface ChatContext {
+  lastInteraction: Date;
+  functionCalls: FunctionCall[];
+  products: Product[];
+  practitioners: Practitioner[];
+  analyticsData: { type: string; timeframe: string; }[];
+  scheduleActivities: TreatmentPlanActivity[];
+}
+
+class ChatSessionManager {
+  private chatInstance: Chat;
+  private context: ChatContext;
+
+  constructor() {
+    const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    this.chatInstance = genAI.chats.create({
+      model: 'gemini-2.0-flash-001',
+      config: {
+        temperature: 0.7,
+        maxOutputTokens: 800,
+      }
+    });
+    this.context = {
+      lastInteraction: new Date(),
+      functionCalls: [],
+      products: [],
+      practitioners: [],
+      analyticsData: [],
+      scheduleActivities: []
+    };
+  }
+
+  private constructPrompt(question: string): string {
+    return `You are AyurAid, an expert Ayurvedic health analyst and advisor with deep knowledge of holistic wellness.
 You analyze health data and provide insightful, personalized observations based on Ayurvedic principles.
 
 User's question: ${question}
+
+Current Context:
+- Previous Function Calls: ${this.context.functionCalls.length}
+- Products Recommended: ${this.context.products.length}
+- Practitioners Available: ${this.context.practitioners.length}
+- Analytics Data Points: ${this.context.analyticsData.length}
+- Schedule Activities: ${this.context.scheduleActivities.length}
 
 Follow these guidelines:
 For health analytics inquiries:
@@ -80,12 +113,13 @@ For health analytics inquiries:
 - Be conversational, empathetic, and helpful in your response.
 - Ensure your advice is general and does not constitute medical diagnosis or treatment prescription.
 - If the user asks for something beyond general advice (e.g., specific medical diagnosis, booking), gently guide them back to seeking advice or information within your scope, or suggest they consult a qualified practitioner or use the relevant sections of the application for such actions.`;
+  }
 
-    // Use the gemini-2.0-flash-001 model for faster responses
-    const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-    const result = await genAI.models.generateContent({
-      model: 'gemini-2.0-flash-001',
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+  async processMessage(question: string, request: NextRequest) {
+    this.context.lastInteraction = new Date();
+
+    const result = await this.chatInstance.sendMessage({
+      message: this.constructPrompt(question),
       config: {
         temperature: 0.7,
         maxOutputTokens: 800,
@@ -96,50 +130,111 @@ For health analytics inquiries:
           },
         },
         tools: [{ functionDeclarations: [getProductsForPurchaseDeclaration, getPractitionersForBookingDeclaration, getAnalyticsDataDeclaration, getScheduleActivitiesDeclaration] }],
-      },
+      }
     });
 
     let text = result.text || DEFAULT_RESPONSE;
-    let products: Product[] = [];
-    let practitioners: Practitioner[] = [];
-    let analyticsData: { type: string; timeframe: string; }[] = [];
-    let scheduleActivities: TreatmentPlanActivity[] = [];
 
-    // Check for function calls in the response
+    // Process function calls and update context
     if (result.functionCalls && Array.isArray(result.functionCalls)) {
+      this.context.functionCalls = this.context.functionCalls.concat(result.functionCalls);
+      
       for (const fnCall of result.functionCalls) {
         if (fnCall.name === 'getProductsForPurchase' && fnCall.args) {
           const { products: selectedProducts, text: productText } = handleProductRecommendations({
             args: fnCall.args as { keywords?: string; count?: number }
           });
-          products = selectedProducts;
+          this.context.products = selectedProducts;
           text = productText || text;
         }
         else if (fnCall.name === 'getPractitionersForBooking' && fnCall.args) {
           const { practitioners: selectedPractitioners, text: practitionerText } = handlePractitionerRecommendations({
             args: fnCall.args as { keywords?: string; count?: number }
           });
-          practitioners = selectedPractitioners;
+          this.context.practitioners = selectedPractitioners;
           text = practitionerText || text;
         }
         else if (fnCall.name === 'getScheduleActivities' && fnCall.args) {
           const { scheduleActivities: activities, text: scheduleText } = await handleScheduleActivities({
             args: fnCall.args as { timing: string; category?: string }
           }, request, JWT_SECRET);
-          scheduleActivities = activities;
+          this.context.scheduleActivities = activities;
           text = scheduleText || text;
         }
         else if (fnCall.name === 'getAnalyticsData' && fnCall.args) {
           const { analyticsData: analytics, text: analyticsText } = await handleAnalyticsData({
             args: fnCall.args as { metric: string; timeframe: string; includeRelated?: boolean }
           }, request, GEMINI_API_KEY);
-          analyticsData = analytics;
+          this.context.analyticsData = analytics;
           text = analyticsText || text;
         }
       }
     }
 
-    return NextResponse.json({ text, products, practitioners, analyticsData, scheduleActivities });
+    return {
+      text,
+      products: this.context.products,
+      practitioners: this.context.practitioners,
+      analyticsData: this.context.analyticsData,
+      scheduleActivities: this.context.scheduleActivities
+    };
+  }
+
+  getLastAccessTime(): number {
+    return this.context.lastInteraction.getTime();
+  }
+}
+
+// Cleanup inactive sessions
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of chatSessions) {
+    if (now - session.getLastAccessTime() > SESSION_TIMEOUT) {
+      chatSessions.delete(token);
+    }
+  }
+}, SESSION_TIMEOUT);
+
+export async function POST(request: NextRequest) {
+  try {
+    // Verify authentication
+    const token = request.headers.get('authorization')?.split(' ')[1];
+    if (!token) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    const verified = await verifyJwtToken(token);
+    if (!verified) {
+      return NextResponse.json(
+        { error: 'Invalid token' },
+        { status: 401 }
+      );
+    }
+
+    const { question } = await request.json();
+
+    if (!question || typeof question !== 'string') {
+      return NextResponse.json(
+        { error: 'Question is required and must be a string' },
+        { status: 400 }
+      );
+    }
+
+    // Get or create chat session
+    let chatSession = chatSessions.get(token);
+    if (!chatSession) {
+      chatSession = new ChatSessionManager();
+      chatSessions.set(token, chatSession);
+    }
+
+    // Process message and get response
+    const result = await chatSession.processMessage(question, request);
+
+    return NextResponse.json(result);
+
   } catch (error) {
     console.error('Error in chatbot API:', error);
     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
