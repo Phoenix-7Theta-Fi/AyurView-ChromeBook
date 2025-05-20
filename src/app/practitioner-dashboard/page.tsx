@@ -1,7 +1,9 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useAuthProtection } from "@/hooks/useAuthProtection"; // Import the hook
+import { User } from "@/lib/types";
+import PatientList from "@/components/dashboard/PatientList";
 
 // Optional: If you have a shared PageContainer or Card component, import it here
 // import PageContainer from '@/components/layout/PageContainer';
@@ -9,6 +11,43 @@ import { useAuthProtection } from "@/hooks/useAuthProtection"; // Import the hoo
 
 const PractitionerDashboardPage: React.FC = () => {
   const { isLoading, isAuthenticated, user } = useAuthProtection("practitioner");
+  const [patients, setPatients] = useState<User[]>([]);
+  const [isLoadingPatients, setIsLoadingPatients] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchPatients = async () => {
+      if (user?.id) {
+        setIsLoadingPatients(true);
+        setError(null);
+        try {
+          const response = await fetch(`/api/practitioners/${user.id}/patients`);
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || `Error: ${response.status}`);
+          }
+          const data: User[] = await response.json();
+          setPatients(data);
+        } catch (err: any) {
+          setError(err.message);
+        } finally {
+          setIsLoadingPatients(false);
+        }
+      } else if (user === null && !isLoading) {
+        // User is loaded but not available (e.g. not logged in, or not a practitioner)
+        // This case is mostly handled by useAuthProtection, but as a safeguard:
+        setIsLoadingPatients(false);
+        // setError("User not available to fetch patients."); // Optional: set an error
+      }
+    };
+
+    // Only fetch patients if user is authenticated and available
+    if (isAuthenticated && user) {
+      fetchPatients();
+    } else if (!isLoading) { // If not loading and not authenticated/user not available
+        setIsLoadingPatients(false);
+    }
+  }, [user, isAuthenticated, isLoading]);
 
   if (isLoading) {
     return <div className="flex justify-center items-center min-h-screen">Loading...</div>;
@@ -52,6 +91,15 @@ const PractitionerDashboardPage: React.FC = () => {
           Welcome, Practitioner!
         </p>
         {/* Add more practitioner-specific content here in the future */}
+      </div>
+
+      <div className="mt-8">
+        <h2 className="text-2xl font-semibold text-gray-700 mb-4">Your Patients</h2>
+        {isLoadingPatients && <p>Loading patients...</p>}
+        {error && <p className="text-red-500">Error loading patients: {error}</p>}
+        {!isLoadingPatients && !error && (
+          <PatientList patients={patients} />
+        )}
       </div>
     </div>
   );

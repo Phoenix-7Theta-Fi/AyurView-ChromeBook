@@ -66,7 +66,55 @@ async function createUser(name, email, password, userType) {
   }
 }
 
+const { seedConsultations } = require('./seed-consultations'); // Import the new seeder
+
+// New function to run specific seeders like seedConsultations
+async function runTargetedSeeders() {
+  let localClient; // Use a local client instance for this function
+  try {
+    console.log('Connecting to database for targeted seeding...');
+    // Use the existing client or create a new one if connectToDb is designed for reuse
+    // For simplicity, let's assume client is already configured and we can connect.
+    // If connectToDb returns a new client each time, that's fine.
+    // If client is a global singleton, also fine.
+    
+    // The existing connectToDb() connects the global `client`.
+    // We need a db instance.
+    await client.connect(); // Ensure the global client is connected
+    const db = client.db("ayurview"); // Get the db instance
+    
+    console.log("Successfully connected to MongoDB for targeted seeding.");
+
+    // Call specific seeders
+    // For now, only seedConsultations as per the task
+    // This assumes users and practitioners are already seeded by their respective scripts
+    await seedConsultations(db);
+
+    console.log('Targeted seeding completed successfully.');
+
+  } catch (error) {
+    console.error('Error during targeted seeding:', error);
+    process.exit(1); // Exit if targeted seeding fails
+  } finally {
+    // Ensure the client is closed if this function initiated the connection
+    // or if it's managing its own connection lifecycle.
+    // Given `client` is global, close it here.
+    if (client) {
+      await client.close();
+      console.log('MongoDB connection closed after targeted seeding.');
+    }
+  }
+}
+
 module.exports = {
   connectToDb,
-  createUser
+  createUser,
+  runTargetedSeeders, // Export the new function
+  // Exposing client might be useful if other scripts need to share the connection
+  // client 
 };
+
+// Example of how this might be run (optional, for illustration):
+// if (require.main === module) {
+//   runTargetedSeeders().catch(console.error);
+// }
