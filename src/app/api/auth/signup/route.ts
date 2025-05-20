@@ -4,9 +4,12 @@ import jwt from "jsonwebtoken";
 import { z } from "zod";
 
 const signupSchema = z.object({
-  firstName: z.string().min(1, "First name is required"),
+  name: z.string().min(1, "Name is required"),
   email: z.string().email("Invalid email address"),
   password: z.string().min(6, "Password must be at least 6 characters long"),
+  userType: z.enum(["regular", "practitioner"], {
+    required_error: "User type is required",
+  }),
 });
 
 export async function POST(request: Request) {
@@ -22,18 +25,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const { firstName, email, password } = result.data;
+    const { name, email, password, userType } = result.data;
 
     // Create user in the database
-    const user = await createUser(firstName, email, password);
+    // Ensure createUser is updated to accept userType
+    const user = await createUser(name, email, password, userType); 
 
-    // Generate JWT token
+    // Generate JWT token - include userType if needed for client-side logic immediately after signup
     const token = jwt.sign(
-      { userId: user.id, email: user.email },
+      { userId: user.id, email: user.email, userType: user.userType },
       process.env.JWT_SECRET || "default-secret",
       { expiresIn: "7d" }
     );
-
+    // The user object returned by createUser should already include userType
     return NextResponse.json({ token, user }, { status: 201 });
   } catch (error) {
     console.error("Signup error:", error);

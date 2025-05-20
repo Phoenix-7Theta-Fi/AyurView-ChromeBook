@@ -1,4 +1,8 @@
 
+"use client"; // Required for hooks like useAuthProtection
+
+import React from "react"; // Required for JSX
+import { useAuthProtection } from "@/hooks/useAuthProtection"; // Import the hook
 import MedicationAdherenceCalendar from '@/components/dashboard/MedicationAdherenceCalendar';
 import CalendarLegend from '@/components/dashboard/CalendarLegend';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -12,6 +16,22 @@ import MeditationDonutChart from '@/components/dashboard/charts/MeditationDonutC
 import BiomarkersChart from '@/components/dashboard/charts/BiomarkersChart';
 
 export default function DashboardPage() {
+  const { isLoading, isAuthenticated, user } = useAuthProtection("regular");
+
+  if (isLoading) {
+    return <div className="flex justify-center items-center min-h-screen">Loading...</div>;
+  }
+
+  if (!isAuthenticated) {
+    // This should ideally not be reached if the hook redirects properly
+    return <div className="flex justify-center items-center min-h-screen">Redirecting to login...</div>;
+  }
+
+  // Optional: Additional check if user is indeed regular, though hook should handle redirect
+  if (user?.userType !== 'regular') {
+    return <div className="flex justify-center items-center min-h-screen">Access Denied. Redirecting...</div>;
+  }
+
   return (
     <div className="space-y-8">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">

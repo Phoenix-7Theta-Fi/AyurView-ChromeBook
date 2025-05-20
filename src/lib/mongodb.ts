@@ -9,16 +9,18 @@ const uri = process.env.MONGODB_URI;
 
 interface User {
   _id: ObjectId;
-  firstName: string;
+  name: string;
   email: string;
   password: string;
+  userType: 'regular' | 'practitioner';
   createdAt: Date;
 }
 
 interface SafeUser {
   id: string;
-  firstName: string;
+  name: string;
   email: string;
+  userType: 'regular' | 'practitioner';
 }
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -54,7 +56,7 @@ async function connectToDb() {
 }
 
 // User-related operations
-async function createUser(firstName: string, email: string, password: string): Promise<SafeUser> {
+async function createUser(name: string, email: string, password: string, userType: 'regular' | 'practitioner'): Promise<SafeUser> {
   try {
     const db = client.db("ayurview");
     const users = db.collection<User>("users");
@@ -72,16 +74,18 @@ async function createUser(firstName: string, email: string, password: string): P
     // Create new user
     const result = await users.insertOne({
       _id: new ObjectId(),
-      firstName,
+      name,
       email,
       password: hashedPassword,
+      userType,
       createdAt: new Date()
     });
 
     return {
       id: result.insertedId.toString(),
-      firstName,
-      email
+      name,
+      email,
+      userType
     };
   } catch (error) {
     console.error("Error creating user:", error);
@@ -102,6 +106,7 @@ async function findUserByEmail(email: string): Promise<User | null> {
 
 async function validateUserCredentials(email: string, password: string): Promise<SafeUser | null> {
   try {
+    // findUserByEmail returns the full User object which includes userType
     const user = await findUserByEmail(email);
     if (!user) {
       return null;
@@ -114,8 +119,9 @@ async function validateUserCredentials(email: string, password: string): Promise
 
     return {
       id: user._id.toString(),
-      firstName: user.firstName,
-      email: user.email
+      name: user.name, // use name instead of firstName
+      email: user.email,
+      userType: user.userType // include userType
     };
   } catch (error) {
     console.error("Error validating credentials:", error);

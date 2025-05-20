@@ -31,6 +31,15 @@ export interface Product {
   stock: number;
 }
 
+export interface User {
+  _id?: ObjectId;
+  id: string;
+  name: string;
+  email: string;
+  userType: 'regular' | 'practitioner';
+  // Add other user-specific fields here if needed in the future
+}
+
 export interface CartItem extends Product {
   quantity: number;
 }

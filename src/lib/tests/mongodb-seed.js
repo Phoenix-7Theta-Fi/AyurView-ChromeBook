@@ -29,7 +29,7 @@ async function connectToDb() {
   }
 }
 
-async function createUser(firstName, email, password) {
+async function createUser(name, email, password, userType) {
   try {
     const db = client.db("ayurview");
     const users = db.collection("users");
@@ -47,16 +47,18 @@ async function createUser(firstName, email, password) {
     // Create new user
     const result = await users.insertOne({
       _id: new ObjectId(),
-      firstName,
+      name,
       email,
       password: hashedPassword,
+      userType, // Add userType to the document
       createdAt: new Date()
     });
 
     return {
       id: result.insertedId.toString(),
-      firstName,
-      email
+      name,
+      email,
+      userType // Include userType in the returned object
     };
   } catch (error) {
     console.error("Error creating user:", error);

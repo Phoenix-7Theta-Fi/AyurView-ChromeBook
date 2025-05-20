@@ -34,12 +34,13 @@ export async function POST(request: Request) {
     }
 
     // Generate JWT token
+    // The user object from validateUserCredentials now includes userType
     const token = jwt.sign(
-      { userId: user.id, email: user.email },
+      { userId: user.id, email: user.email, userType: user.userType },
       process.env.JWT_SECRET || "default-secret",
       { expiresIn: "7d" }
     );
-
+    // The user object (which includes userType) is returned as is.
     return NextResponse.json({ token, user });
   } catch (error) {
     console.error("Login error:", error);

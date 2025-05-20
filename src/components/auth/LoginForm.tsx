@@ -35,7 +35,17 @@ export default function LoginForm() {
       // Store the token and user data in localStorage
       localStorage.setItem("token", data.token);
       localStorage.setItem("user", JSON.stringify(data.user));
-      router.push("/treatment-plan"); // Redirect to treatment plan after successful login
+
+      // Redirect based on userType
+      if (data.user?.userType === "practitioner") {
+        router.push("/practitioner-dashboard");
+      } else if (data.user?.userType === "regular") {
+        router.push("/dashboard"); // Or "/treatment-plan" if that's preferred for regular users
+      } else {
+        // Fallback if userType is missing, though API should ensure it's present
+        console.warn("UserType not found after login, defaulting to /dashboard");
+        router.push("/dashboard");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
