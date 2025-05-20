@@ -10,7 +10,14 @@ const users = [
   { name: "James", email: "james@ayur.com", userType: "regular" },
   { name: "Anna", email: "anna@ayur.com", userType: "regular" },
   { name: "Robert", email: "robert@ayur.com", userType: "regular" },
-  { name: "Maria", email: "maria@ayur.com", userType: "regular" }
+  { name: "Maria", email: "maria@ayur.com", userType: "regular" },
+  // Add our practitioners
+  { name: "Dr. Ananya Sharma", email: "ananya.sharma@ayur.com", userType: "practitioner" },
+  { name: "Yogi Rajendra Desai", email: "rajendra.desai@ayur.com", userType: "practitioner" },
+  { name: "Ms. Priya Kulkarni", email: "priya.kulkarni@ayur.com", userType: "practitioner" },
+  { name: "Dr. Vikram Singh", email: "vikram.singh@ayur.com", userType: "practitioner" },
+  { name: "Dr. Meera Chavan", email: "meera.chavan@ayur.com", userType: "practitioner" },
+  { name: "Acharya Advait Sharma", email: "advait.sharma@ayur.com", userType: "practitioner" }
 ];
 
 async function seedUsers() {
