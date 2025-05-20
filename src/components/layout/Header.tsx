@@ -23,7 +23,7 @@ const regularNavItems = [
   { href: '/treatment-plan', label: 'Treatment Plan', icon: ClipboardList },
   { href: '/schedule', label: 'Schedule', icon: CalendarCheck },
   { href: '/chatbot', label: 'Chatbot', icon: Bot },
-  // { href: '/practitioners', label: 'Practitioners', icon: Users }, // Assuming this is for regular users to find practitioners
+  { href: '/practitioners', label: 'Practitioners', icon: Users },
   { href: '/shop', label: 'Shop', icon: ShoppingCartLucideIcon },
 ];
 
