@@ -1,13 +1,20 @@
 import { NextResponse } from 'next/server';
-import { connectToDb } from '@/lib/mongodb';
-import { ObjectId } from 'mongodb';
+import { connectToDb } from '@/lib/sqlite'; // Changed
+// ObjectId no longer needed
 import jwt from 'jsonwebtoken';
-import type { SleepWellnessData } from '@/lib/types';
+// SleepWellnessData type might need adjustment if its structure was MongoDB specific (e.g. Date types)
+// import type { SleepWellnessData } from '@/lib/types'; 
+import { parseISO } from 'date-fns'; // To handle date strings from query params
 
 // Helper function to verify JWT token
-function verifyToken(token: string): { userId: string; email: string } | null {
+interface DecodedToken {
+  userId: number; // Expect numeric userId
+  email: string;
+  userType: string;
+}
+function verifyToken(token: string): DecodedToken | null {
   try {
-    return jwt.verify(token, process.env.JWT_SECRET || 'default-secret') as { userId: string; email: string };
+    return jwt.verify(token, process.env.JWT_SECRET || 'default-secret') as DecodedToken;
   } catch {
     return null;
   }
@@ -15,7 +22,6 @@ function verifyToken(token: string): { userId: string; email: string } | null {
 
 export async function GET(request: Request) {
   try {
-    // Check authentication
     const authHeader = request.headers.get('authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'No token provided' }, { status: 401 });
@@ -24,58 +30,80 @@ export async function GET(request: Request) {
     const token = authHeader.split(' ')[1];
     const decoded = verifyToken(token);
 
-    if (!decoded?.email) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    if (!decoded?.userId) { // Check for userId from token
+      return NextResponse.json({ error: 'Invalid token or userId missing' }, { status: 401 });
     }
+    const userId = decoded.userId;
 
-    // Get date range from query parameters
     const { searchParams } = new URL(request.url);
-    const startDate = searchParams.get('startDate');
-    const endDate = searchParams.get('endDate');
+    const startDateParam = searchParams.get('startDate'); // Expect YYYY-MM-DD
+    const endDateParam = searchParams.get('endDate');     // Expect YYYY-MM-DD
 
-    // Connect to database
-    const client = await connectToDb();
-    const db = client.db('ayurview');
+    // Validate and format dates for SQL query
+    let sqlStartDate: string | null = null;
+    let sqlEndDate: string | null = null;
 
-    // Get user ID
-    const usersCollection = db.collection('users');
-    const user = await usersCollection.findOne({ email: decoded.email });
-    
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    if (startDateParam) {
+        // Basic validation, can be more robust
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(startDateParam)) return NextResponse.json({ error: 'Invalid startDate format, use YYYY-MM-DD' }, { status: 400 });
+        sqlStartDate = startDateParam;
     }
-    const collection = db.collection<SleepWellnessData>('sleepWellness');
-
-    // Build query with date range and userId
-    const query: any = { userId: new ObjectId(user._id) };
-    if (startDate || endDate) {
-      query.date = {};
-      if (startDate) query.date.$gte = new Date(startDate);
-      if (endDate) query.date.$lte = new Date(endDate);
+    if (endDateParam) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(endDateParam)) return NextResponse.json({ error: 'Invalid endDate format, use YYYY-MM-DD' }, { status: 400 });
+        sqlEndDate = endDateParam;
     }
-
-    // Fetch sleep wellness data
-    console.log('Query:', query);
-    const sleepWellnessData = await collection
-      .find(query)
-      .sort({ date: 1 })
-      .toArray();
     
-    console.log('Found sleep wellness records:', sleepWellnessData.length);
+    const db = await connectToDb();
+    
+    let sqlQuery = `
+      SELECT 
+        id, date, rem_hours, deep_hours, light_hours, awake_hours, 
+        total_duration_hours, stress_level, mood_score 
+      FROM sleep_wellness_log 
+      WHERE user_id = ?`;
+    const queryParams: any[] = [userId];
 
-    // Transform data for the chart component
-    console.log('First record sample:', sleepWellnessData[0]);
-    const formattedData = sleepWellnessData.map((data) => ({
-      day: new Date(data.date).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
-      // Sleep metrics
-      REM: data.sleepMetrics.rem,
-      Deep: data.sleepMetrics.deep,
-      Light: data.sleepMetrics.light,
-      Awake: data.sleepMetrics.awake,
-      // Mental wellness metrics for the line chart
-      stressLevel: data.mentalWellness.stressLevel,
-      moodScore: data.mentalWellness.moodScore,
-    }));
+    if (sqlStartDate) {
+      sqlQuery += ` AND date >= ?`;
+      queryParams.push(sqlStartDate);
+    }
+    if (sqlEndDate) {
+      sqlQuery += ` AND date <= ?`;
+      queryParams.push(sqlEndDate);
+    }
+    sqlQuery += ` ORDER BY date ASC;`;
+
+    console.log('Executing SQL (Sleep Wellness):', sqlQuery);
+    console.log('With params:', queryParams);
+
+    const sleepWellnessDbData = await new Promise<any[]>((resolve, reject) => {
+      db.all(sqlQuery, queryParams, (err, rows) => {
+        if (err) {
+          console.error("SQL Error:", err);
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
+    
+    console.log('Found sleep wellness records (SQLite):', sleepWellnessDbData.length);
+
+    const formattedData = sleepWellnessDbData.map((data) => {
+      // data.date is YYYY-MM-DD string from SQLite
+      const recordDate = parseISO(data.date); // parseISO correctly handles YYYY-MM-DD
+      return {
+        // id: data.id.toString(), // if needed
+        day: recordDate.toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
+        REM: data.rem_hours,
+        Deep: data.deep_hours,
+        Light: data.light_hours,
+        Awake: data.awake_hours,
+        // totalDuration: data.total_duration_hours, // if needed
+        stressLevel: data.stress_level,
+        moodScore: data.mood_score,
+      };
+    });
 
     return NextResponse.json({
       success: true,
@@ -83,18 +111,10 @@ export async function GET(request: Request) {
     });
 
   } catch (error: any) {
-    console.error('Error fetching sleep wellness data:', error);
-
-    if (error.name === 'JsonWebTokenError') {
-      return NextResponse.json(
-        { error: 'Invalid token' },
-        { status: 401 }
-      );
+    console.error('Error fetching sleep wellness data (SQLite):', error);
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 });
     }
-
-    return NextResponse.json(
-      { error: 'Failed to fetch sleep wellness data' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch sleep wellness data' }, { status: 500 });
   }
 }

@@ -1,22 +1,22 @@
-import { connectToDb } from "@/lib/mongodb";
+import { connectToDb } from "@/lib/sqlite"; // Changed to sqlite
 import { NextResponse } from "next/server";
-import { ObjectId } from "mongodb";
+// ObjectId is no longer needed from mongodb
 import { startOfDay, endOfDay } from "date-fns";
 import jwt from "jsonwebtoken";
 
 // Helper function to verify JWT token
-function verifyToken(token: string): { userId: string; email: string } | null {
+// Token now contains numeric userId
+function verifyToken(token: string): { userId: number; email: string, userType: string } | null {
   try {
-    return jwt.verify(token, process.env.JWT_SECRET || "default-secret") as { userId: string; email: string };
+    return jwt.verify(token, process.env.JWT_SECRET || "default-secret") as { userId: number; email: string, userType: string };
   } catch {
     return null;
   }
 }
 
 export async function GET(request: Request) {
-  console.log('Biomarkers API called');
+  console.log('Biomarkers API called (SQLite)');
   try {
-    // Check authentication
     const authHeader = request.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: "No token provided" }, { status: 401 });

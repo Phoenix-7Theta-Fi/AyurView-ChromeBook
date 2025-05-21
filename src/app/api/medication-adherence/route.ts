@@ -1,24 +1,27 @@
-import { connectToDb } from "@/lib/mongodb";
+import { connectToDb } from "@/lib/sqlite"; // Changed
 import { NextResponse } from "next/server";
-import { ObjectId } from "mongodb";
-import { startOfMonth, endOfMonth } from "date-fns";
+// ObjectId no longer needed
+import { startOfMonth, endOfMonth, formatISO } from "date-fns"; // formatISO
 import jwt from "jsonwebtoken";
 
 // Helper function to verify JWT token
-function verifyToken(token: string): { userId: string; email: string } | null {
+interface DecodedToken {
+  userId: number; // Expect numeric userId
+  email: string;
+  userType: string;
+}
+function verifyToken(token: string): DecodedToken | null {
   try {
-    return jwt.verify(token, process.env.JWT_SECRET || "default-secret") as { userId: string; email: string };
+    return jwt.verify(token, process.env.JWT_SECRET || "default-secret") as DecodedToken;
   } catch {
     return null;
   }
 }
 
 export async function GET(request: Request) {
-  console.log('Medication adherence API called');
+  console.log('Medication adherence API called (SQLite)');
   try {
-    // Check authentication
     const authHeader = request.headers.get("authorization");
-    console.log('Auth header:', authHeader);
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: "No token provided" }, { status: 401 });
     }
@@ -26,59 +29,58 @@ export async function GET(request: Request) {
     const token = authHeader.split(" ")[1];
     const decoded = verifyToken(token);
     
-    if (!decoded?.email) {
-      return NextResponse.json({ error: "Invalid token" }, { status: 401 });
+    if (!decoded?.userId) {
+      return NextResponse.json({ error: "Invalid token or userId missing" }, { status: 401 });
     }
+    const userId = decoded.userId;
 
-    // Parse query parameters for date range
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get("date");
-    const date = dateParam ? new Date(dateParam) : new Date();
+    const currentJsDate = dateParam ? new Date(dateParam) : new Date();
 
-    // Get start and end of the month for the query
-    const startDate = startOfMonth(date);
-    const endDate = endOfMonth(date);
+    // Dates for SQL query, YYYY-MM-DD
+    const startDate = formatISO(startOfMonth(currentJsDate), { representation: 'date' });
+    const endDate = formatISO(endOfMonth(currentJsDate), { representation: 'date' });
 
-    // Connect to database
-    console.log('Connecting to database...');
-    const client = await connectToDb();
-    const db = client.db("ayurview");
-    console.log('Connected to database successfully');
+    const db = await connectToDb();
 
-    // Get user ID
-    console.log('Finding user with email:', decoded.email);
-    const usersCollection = db.collection("users");
-    const allUsers = await usersCollection.find({}).toArray();
-    console.log('All users:', allUsers.map(u => u.email));
-    
-    const user = await usersCollection.findOne({ email: decoded.email });
-    console.log('Found user:', user ? user : 'not found');
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
+    const sqlQuery = `
+      SELECT 
+        id,
+        date,
+        adherence_percentage 
+      FROM medication_adherence_log
+      WHERE user_id = ? AND date >= ? AND date <= ?
+      ORDER BY date ASC;
+    `;
+    const queryParams: any[] = [userId, startDate, endDate];
 
-    // Fetch medication adherence data
-    const adherenceData = await db.collection("medicationAdherence")
-      .find({
-        userId: new ObjectId(user._id),
-        date: {
-          $gte: startDate,
-          $lte: endDate
+    console.log('Executing SQL (Medication Adherence):', sqlQuery);
+    console.log('With params:', queryParams);
+
+    const adherenceData = await new Promise<any[]>((resolve, reject) => {
+      db.all(sqlQuery, queryParams, (err, rows) => {
+        if (err) {
+          console.error("SQL Error:", err);
+          reject(err);
+        } else {
+          resolve(rows);
         }
-      })
-      .toArray();
+      });
+    });
 
     // Transform data to match the expected format
     const transformedData = adherenceData.map(record => ({
-      date: record.date,
-      adherence: record.adherence
+      // id: record.id.toString(), // if needed by frontend
+      date: record.date, // Already YYYY-MM-DD string
+      adherence: record.adherence_percentage 
     }));
 
-    console.log('Returning data:', transformedData.length, 'records');
+    console.log('Returning data (SQLite):', transformedData.length, 'records');
     return NextResponse.json(transformedData);
 
   } catch (error) {
-    console.error("Error fetching medication adherence data:", error);
+    console.error("Error fetching medication adherence data (SQLite):", error);
     return NextResponse.json(
       { error: "Failed to fetch medication adherence data" },
       { status: 500 }

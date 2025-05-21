@@ -1,38 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { mongodb } from '@/lib/mongodb';
+import { connectToDb } from '@/lib/sqlite'; // Changed
 import { verify } from 'jsonwebtoken';
-import { ObjectId } from 'mongodb';
+// ObjectId no longer needed
 
-interface YogaPractice {
-  userId: ObjectId;
-  timestamp: Date;
+// Interface for data coming from SQLite (column names)
+interface YogaPracticeDbRow {
+  id: number; // or string if converted before this point
+  user_id: number;
+  timestamp: string; // ISO8601 string
   type: string;
   practice: string;
-  subPractice: string;
+  sub_practice: string;
   element: string;
-  duration: number;
+  duration_minutes: number;
   difficulty: 'Beginner' | 'Intermediate' | 'Advanced';
-  completed: boolean;
+  completed: number; // 0 or 1
 }
 
-interface ElementData {
-  totalDuration: number;
+// Interface for the structure expected by transformToSunburstData
+interface YogaPracticeTransformed {
+  userId: number; // Keep consistent if needed, or remove if only for internal processing
+  timestamp: Date; // transformToSunburstData might expect Date objects
+  type: string;
+  practice: string;
+  subPractice: string; // Changed from sub_practice
+  element: string;
+  duration: number; // Changed from duration_minutes
+  difficulty: 'Beginner' | 'Intermediate' | 'Advanced';
+  completed: boolean; // Changed from number
 }
 
-interface SubPracticeData {
-  elements: Record<string, ElementData>;
-  totalDuration: number;
-}
-
-interface PracticeData {
-  subPractices: Record<string, SubPracticeData>;
-  totalDuration: number;
-}
-
-interface TypeGroup {
-  practices: Record<string, PracticeData>;
-  totalDuration: number;
-}
 
 interface SunburstNode {
   name: string;
@@ -42,50 +39,85 @@ interface SunburstNode {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
+interface DecodedToken {
+  userId: number; // Expect numeric userId
+}
+
 export async function GET(req: NextRequest) {
   try {
-    // Get token from Authorization header
     const token = req.headers.get('authorization')?.split(' ')[1];
     if (!token) {
-      return NextResponse.json(
-        { error: 'Authentication token required' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Authentication token required' }, { status: 401 });
     }
 
-    // Verify token
-    const decoded = verify(token, JWT_SECRET) as { userId: string };
-    const userId = new ObjectId(decoded.userId);
+    const decoded = verify(token, JWT_SECRET) as DecodedToken;
+    const userId = decoded.userId; // Numeric ID
 
-    // Get date range from query params (optional)
     const searchParams = req.nextUrl.searchParams;
-    const startDate = searchParams.get('startDate');
-    const endDate = searchParams.get('endDate');
+    const startDateParam = searchParams.get('startDate'); // Expect ISO8601 Date string
+    const endDateParam = searchParams.get('endDate');     // Expect ISO8601 Date string
 
-    // Get MongoDB database instance
-    const db = mongodb.db("ayurview");
+    const db = await connectToDb();
 
-    // Build query
-    const query: any = { userId };
-    if (startDate || endDate) {
-      query.timestamp = {};
-      if (startDate) query.timestamp.$gte = new Date(startDate);
-      if (endDate) query.timestamp.$lte = new Date(endDate);
+    let sqlQuery = `
+      SELECT id, user_id, timestamp, type, practice, sub_practice, element, 
+             duration_minutes, difficulty, completed 
+      FROM yoga_practices_log 
+      WHERE user_id = ?`;
+    const queryParams: any[] = [userId];
+
+    if (startDateParam) {
+      // Basic validation, can be more robust
+      if (!/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z/.test(startDateParam) && !/\d{4}-\d{2}-\d{2}/.test(startDateParam)) {
+          return NextResponse.json({ error: 'Invalid startDate format, use YYYY-MM-DD or ISO String' }, { status: 400 });
+      }
+      sqlQuery += ` AND timestamp >= ?`;
+      queryParams.push(startDateParam);
     }
+    if (endDateParam) {
+      if (!/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z/.test(endDateParam) && !/\d{4}-\d{2}-\d{2}/.test(endDateParam)) {
+        return NextResponse.json({ error: 'Invalid endDate format, use YYYY-MM-DD or ISO String' }, { status: 400 });
+      }
+      sqlQuery += ` AND timestamp <= ?`;
+      queryParams.push(endDateParam);
+    }
+    sqlQuery += ` ORDER BY timestamp DESC;`;
 
-    // Fetch yoga practices
-    const practices = await db
-      .collection<YogaPractice>('yogaPractices')
-      .find(query)
-      .sort({ timestamp: -1 })
-      .toArray() as unknown as YogaPractice[];
+    console.log('Executing SQL (Yoga Practices):', sqlQuery);
+    console.log('With params:', queryParams);
 
-    // Transform data for sunburst chart
-    const transformedData = transformToSunburstData(practices);
+    const practicesDbData = await new Promise<YogaPracticeDbRow[]>((resolve, reject) => {
+      db.all(sqlQuery, queryParams, (err, rows) => {
+        if (err) {
+          console.error("SQL Error:", err);
+          reject(err);
+        } else {
+          resolve(rows as YogaPracticeDbRow[]);
+        }
+      });
+    });
+
+    // Transform data for the sunburst chart function
+    const practicesForSunburst: YogaPracticeTransformed[] = practicesDbData.map(p => ({
+        userId: p.user_id,
+        timestamp: new Date(p.timestamp), // Convert ISO string to Date object
+        type: p.type,
+        practice: p.practice,
+        subPractice: p.sub_practice,
+        element: p.element,
+        duration: p.duration_minutes,
+        difficulty: p.difficulty,
+        completed: Boolean(p.completed)
+    }));
+    
+    const transformedData = transformToSunburstData(practicesForSunburst);
 
     return NextResponse.json(transformedData);
   } catch (error: any) {
-    console.error('Error fetching yoga practices:', error);
+    console.error('Error fetching yoga practices (SQLite):', error);
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+        return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 });
+    }
     return NextResponse.json(
       { error: 'Failed to fetch yoga practices' },
       { status: 500 }

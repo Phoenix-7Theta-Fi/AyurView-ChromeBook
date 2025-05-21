@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed:sqlite": "NODE_OPTIONS=\"--loader ts-node/esm\" ts-node src/lib/tests/seed-sqlite.ts",
+    "test:api": "NODE_OPTIONS=\"--loader ts-node/esm\" ts-node src/tests/api/run-all-tests.ts"
   },
   "dependencies": {
     "@google/genai": "^0.13.0",
@@ -44,8 +46,8 @@
     "@radix-ui/react-tooltip": "^1.1.8",
     "@tanstack-query-firebase/react": "^1.0.5",
     "@tanstack/react-query": "^5.66.0",
-    "@types/mongodb": "^4.0.6",
     "bcryptjs": "^3.0.2",
+    "sqlite3": "^5.1.7",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
@@ -55,7 +57,6 @@
     "firebase": "^11.7.0",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.475.0",
-    "mongodb": "^6.16.0",
     "next": "15.2.3",
     "patch-package": "^8.0.0",
     "react": "^18.3.1",
@@ -69,9 +70,11 @@
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.9",
+    "@types/sqlite3": "^3.1.11",
     "@types/node": "^20.17.46",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "node-fetch": "^3.3.2",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "ts-node": "^10.9.2",

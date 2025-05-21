@@ -1,10 +1,12 @@
-import { connectToDatabase } from '@/lib/mongodb';
+import { connectToDb } from '@/lib/sqlite'; // Changed
 import { verifyJwtToken } from '@/lib/utils';
 import { NextRequest, NextResponse } from 'next/server';
-import { ObjectId } from 'mongodb';
+// ObjectId no longer needed
 
-interface MongoProduct {
-  _id: ObjectId;
+// Interface for the product structure expected by the frontend (if specific)
+// This can be similar to the MongoProduct but without _id and Date types if SQLite returns strings
+interface ProductResponse {
+  id: string;
   name: string;
   description: string;
   price: number;
@@ -12,73 +14,78 @@ interface MongoProduct {
   dataAiHint?: string;
   category: string;
   stock: number;
-  createdAt: Date;
-  updatedAt: Date;
+  // createdAt and updatedAt are usually not directly sent unless needed
 }
 
 export async function GET(request: NextRequest) {
   try {
-    // Initialize auth-related vars
     const token = request.headers.get('authorization')?.split(' ')[1];
-    
-    // Verify authentication token
     if (!token) {
-      return NextResponse.json(
-        { error: 'No token provided' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'No token provided' }, { status: 401 });
     }
 
-    const verified = await verifyJwtToken(token);
-    if (!verified) {
-      return NextResponse.json(
-        { error: 'Invalid or expired token' },
-        { status: 401 }
-      );
+    const verified = await verifyJwtToken(token); // Assuming verifyJwtToken returns a payload or throws
+    if (!verified) { // Check depends on what verifyJwtToken returns upon failure
+      return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 });
     }
 
-    // Get query parameters
     const { searchParams } = new URL(request.url);
     const category = searchParams.get('category');
     const search = searchParams.get('search');
 
-    // Connect to database
-    const { db } = await connectToDatabase();
-    const collection = db.collection<MongoProduct>('products');
+    const db = await connectToDb();
+    
+    let sqlQuery = `
+      SELECT id, name, description, price, image_url, data_ai_hint, category, stock, createdAt, updatedAt 
+      FROM products 
+      WHERE 1=1
+    `; // Using 1=1 to easily append AND conditions
+    const queryParams: any[] = [];
 
-    // Build query based on filters
-    let query: any = {};
     if (category) {
-      query.category = category;
+      sqlQuery += " AND category = ?";
+      queryParams.push(category);
     }
     if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
+      sqlQuery += " AND (name LIKE ? OR description LIKE ?)";
+      queryParams.push(`%${search}%`);
+      queryParams.push(`%${search}%`);
     }
 
-    // Fetch products with query
-    const products = await collection
-      .find(query)
-      .sort({ category: 1, name: 1 })
-      .toArray();
+    sqlQuery += " ORDER BY category ASC, name ASC;";
 
-    // Map MongoDB _id to id for frontend consistency
-    const mappedProducts = products.map((product) => ({
-      id: product._id.toString(),
+    console.log('Executing SQL (Products):', sqlQuery);
+    console.log('With params:', queryParams);
+
+    const products = await new Promise<any[]>((resolve, reject) => {
+      db.all(sqlQuery, queryParams, (err, rows) => {
+        if (err) {
+          console.error("SQL Error:", err);
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
+
+    const mappedProducts: ProductResponse[] = products.map((product) => ({
+      id: product.id.toString(),
       name: product.name,
       description: product.description,
       price: product.price,
-      imageUrl: product.imageUrl,
-      dataAiHint: product.dataAiHint,
+      imageUrl: product.image_url,
+      dataAiHint: product.data_ai_hint,
       category: product.category,
       stock: product.stock
+      // createdAt and updatedAt can be added if needed by frontend
     }));
 
     return NextResponse.json(mappedProducts);
   } catch (error: any) {
-    console.error('Error fetching products:', error);
+    console.error('Error fetching products (SQLite):', error);
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+        return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 });
+    }
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

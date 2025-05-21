@@ -1,22 +1,26 @@
-import { connectToDb } from "@/lib/mongodb";
+import { connectToDb } from "@/lib/sqlite"; // Changed
 import { NextResponse } from "next/server";
-import { ObjectId } from "mongodb";
-import { startOfMonth, endOfMonth } from "date-fns";
+// ObjectId no longer needed
+import { startOfMonth, endOfMonth, formatISO, parseISO } from "date-fns"; // formatISO and parseISO
 import jwt from "jsonwebtoken";
 
 // Helper function to verify JWT token
-function verifyToken(token: string): { userId: string; email: string } | null {
+interface DecodedToken {
+  userId: number; // Expect numeric userId
+  email: string;
+  userType: string;
+}
+function verifyToken(token: string): DecodedToken | null {
   try {
-    return jwt.verify(token, process.env.JWT_SECRET || "default-secret") as { userId: string; email: string };
+    return jwt.verify(token, process.env.JWT_SECRET || "default-secret") as DecodedToken;
   } catch {
     return null;
   }
 }
 
 export async function GET(request: Request) {
-  console.log('Diet analytics API called');
+  console.log('Diet analytics API called (SQLite)');
   try {
-    // Check authentication
     const authHeader = request.headers.get("authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: "No token provided" }, { status: 401 });
@@ -25,63 +29,72 @@ export async function GET(request: Request) {
     const token = authHeader.split(" ")[1];
     const decoded = verifyToken(token);
     
-    if (!decoded?.email) {
-      return NextResponse.json({ error: "Invalid token" }, { status: 401 });
+    if (!decoded?.userId) {
+      return NextResponse.json({ error: "Invalid token or userId missing" }, { status: 401 });
     }
+    const userId = decoded.userId;
 
-    // Parse query parameters for date range
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get("date");
-    const date = dateParam ? new Date(dateParam) : new Date();
+    const currentJsDate = dateParam ? new Date(dateParam) : new Date();
 
-    // Get start and end of the month for the query
-    const startDate = startOfMonth(date);
-    const endDate = endOfMonth(date);
+    // Dates for SQL query, YYYY-MM-DD
+    const startDate = formatISO(startOfMonth(currentJsDate), { representation: 'date' });
+    const endDate = formatISO(endOfMonth(currentJsDate), { representation: 'date' });
 
-    // Connect to database
-    console.log('Connecting to database...');
-    const client = await connectToDb();
-    const db = client.db("ayurview");
+    const db = await connectToDb();
 
-    // Get user ID
-    const user = await db.collection("users").findOne({ email: decoded.email });
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
+    const sqlQuery = `
+      SELECT 
+        id,
+        date,
+        protein_g,
+        carbs_g,
+        fats_g,
+        vitamins_units,
+        minerals_units
+      FROM diet_analytics_log
+      WHERE user_id = ? AND date >= ? AND date <= ?
+      ORDER BY date ASC; 
+    `;
+    const queryParams: any[] = [userId, startDate, endDate];
+    
+    console.log('Executing SQL (Diet Analytics):', sqlQuery);
+    console.log('With params:', queryParams);
 
-    // Fetch diet analytics data
-    const dietData = await db.collection("dietAnalytics")
-      .find({
-        userId: new ObjectId(user._id),
-        date: {
-          $gte: startDate,
-          $lte: endDate
+    const dietData = await new Promise<any[]>((resolve, reject) => {
+      db.all(sqlQuery, queryParams, (err, rows) => {
+        if (err) {
+          console.error("SQL Error:", err);
+          reject(err);
+        } else {
+          resolve(rows);
         }
-      })
-      .toArray();
-
-    // Transform data to match the DietAnalyticsChart component format
-    const transformedData = dietData.map(record => ({
-      day: record.date.toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
-      Protein: record.nutrients.protein,
-      Carbs: record.nutrients.carbs,
-      Fats: record.nutrients.fats,
-      Vitamins: record.nutrients.vitamins,
-      Minerals: record.nutrients.minerals
-    }));
-
-    // Sort data by date ascending
-    transformedData.sort((a, b) => {
-      const dateA = new Date(a.day);
-      const dateB = new Date(b.day);
-      return dateA.getTime() - dateB.getTime();
+      });
     });
 
-    console.log('Returning data:', transformedData.length, 'records');
+    // Transform data to match the DietAnalyticsChart component format
+    const transformedData = dietData.map(record => {
+      // record.date is YYYY-MM-DD from SQLite
+      const recordDate = parseISO(record.date); // Parse YYYY-MM-DD string to JS Date
+      return {
+        // id: record.id.toString(), // if frontend needs an id for each item
+        day: recordDate.toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
+        Protein: record.protein_g,
+        Carbs: record.carbs_g,
+        Fats: record.fats_g,
+        Vitamins: record.vitamins_units,
+        Minerals: record.minerals_units
+      };
+    });
+    
+    // Sorting is already handled by SQL's ORDER BY date ASC.
+
+    console.log('Returning data (SQLite):', transformedData.length, 'records');
     return NextResponse.json(transformedData);
 
   } catch (error) {
-    console.error("Error fetching diet analytics data:", error);
+    console.error("Error fetching diet analytics data (SQLite):", error);
     return NextResponse.json(
       { error: "Failed to fetch diet analytics data" },
       { status: 500 }

@@ -1,24 +1,27 @@
-import { connectToDb } from "@/lib/mongodb";
+import { connectToDb } from "@/lib/sqlite"; // Changed
 import { NextResponse } from "next/server";
-import { ObjectId } from "mongodb";
-import { startOfMonth, endOfMonth } from "date-fns";
+// ObjectId no longer needed
+import { startOfMonth, endOfMonth, formatISO } from "date-fns"; // formatISO
 import jwt from "jsonwebtoken";
 
 // Helper function to verify JWT token
-function verifyToken(token: string): { userId: string; email: string } | null {
+interface DecodedToken {
+  userId: number; // Expect numeric userId
+  email: string;
+  userType: string;
+}
+function verifyToken(token: string): DecodedToken | null {
   try {
-    return jwt.verify(token, process.env.JWT_SECRET || "default-secret") as { userId: string; email: string };
+    return jwt.verify(token, process.env.JWT_SECRET || "default-secret") as DecodedToken;
   } catch {
     return null;
   }
 }
 
 export async function GET(request: Request) {
-  console.log('Meditation practices API called');
+  console.log('Meditation practices API called (SQLite)');
   try {
-    // Check authentication
     const authHeader = request.headers.get("authorization");
-    console.log('Auth header:', authHeader);
     if (!authHeader?.startsWith("Bearer ")) {
       return NextResponse.json({ error: "No token provided" }, { status: 401 });
     }
@@ -26,58 +29,62 @@ export async function GET(request: Request) {
     const token = authHeader.split(" ")[1];
     const decoded = verifyToken(token);
     
-    if (!decoded?.email) {
-      return NextResponse.json({ error: "Invalid token" }, { status: 401 });
+    if (!decoded?.userId) {
+      return NextResponse.json({ error: "Invalid token or userId missing" }, { status: 401 });
     }
+    const userId = decoded.userId;
 
-    // Parse query parameters for date range
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get("date");
-    const date = dateParam ? new Date(dateParam) : new Date();
+    const currentJsDate = dateParam ? new Date(dateParam) : new Date();
 
-    // Get start and end of the month for the query
-    const startDate = startOfMonth(date);
-    const endDate = endOfMonth(date);
+    // Dates for SQL query, YYYY-MM-DDTHH:MM:SS.SSSZ (ISO8601 string for DATETIME comparison)
+    const startDate = startOfMonth(currentJsDate).toISOString();
+    const endDate = endOfMonth(currentJsDate).toISOString();
 
-    // Connect to database
-    console.log('Connecting to database...');
-    const client = await connectToDb();
-    const db = client.db("ayurview");
-    console.log('Connected to database successfully');
+    const db = await connectToDb();
 
-    // Get user ID
-    console.log('Finding user with email:', decoded.email);
-    const usersCollection = db.collection("users");
-    const user = await usersCollection.findOne({ email: decoded.email });
-    console.log('Found user:', user ? user : 'not found');
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
+    const sqlQuery = `
+      SELECT 
+        id,
+        timestamp,
+        practice_type,
+        duration_minutes,
+        completed 
+      FROM meditation_practices_log
+      WHERE user_id = ? AND timestamp >= ? AND timestamp <= ?
+      ORDER BY timestamp ASC;
+    `;
+    const queryParams: any[] = [userId, startDate, endDate];
 
-    // Fetch meditation practices data
-    const meditationData = await db.collection("meditationPractices")
-      .find({
-        userId: new ObjectId(user._id),
-        timestamp: {
-          $gte: startDate,
-          $lte: endDate
+    console.log('Executing SQL (Meditation Practices):', sqlQuery);
+    console.log('With params:', queryParams);
+
+    const meditationData = await new Promise<any[]>((resolve, reject) => {
+      db.all(sqlQuery, queryParams, (err, rows) => {
+        if (err) {
+          console.error("SQL Error:", err);
+          reject(err);
+        } else {
+          resolve(rows);
         }
-      })
-      .toArray();
+      });
+    });
 
     // Transform data to match the expected format
     const transformedData = meditationData.map(record => ({
-      timestamp: record.timestamp,
-      practiceType: record.practiceType,
-      duration: record.duration,
-      completed: record.completed
+      // id: record.id.toString(), // if needed by frontend
+      timestamp: record.timestamp, // Already ISO string
+      practiceType: record.practice_type,
+      duration: record.duration_minutes,
+      completed: Boolean(record.completed) // Convert 0/1 to boolean
     }));
 
-    console.log('Returning data:', transformedData.length, 'records');
+    console.log('Returning data (SQLite):', transformedData.length, 'records');
     return NextResponse.json(transformedData);
 
   } catch (error) {
-    console.error("Error fetching meditation practices data:", error);
+    console.error("Error fetching meditation practices data (SQLite):", error);
     return NextResponse.json(
       { error: "Failed to fetch meditation practices data" },
       { status: 500 }

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createUser } from "@/lib/mongodb";
+import { createUser } from "@/lib/sqlite"; // Changed to sqlite
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 
